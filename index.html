@@ -306,12 +306,8 @@
                 }
                 case 'tiktok': {
                     const id = (u.match(/\/video\/(\d+)/) || [])[1] || '';
-                    if (!id) return fallbackLink(u);
-                    const src = `https://www.tiktok.com/player/v1/${id}?description=1&music_info=1`;
-                    return `<iframe src="${src}" width="325" height="575" loading="lazy"
-                        frameborder="0" scrolling="no"
-                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
-                        style="display:block;max-width:100%;border:0;border-radius:3px;"></iframe>`;
+                    return `<blockquote class="tiktok-embed" cite="${u}" data-video-id="${id}"
+                        style="max-width:605px;min-width:325px;"><section></section></blockquote>`;
                 }
                 case 'facebook': {
                     const isVideo = /\/videos?\/|watch\?.*v=|\/video\//i.test(u);
@@ -335,7 +331,7 @@
 
         // Approx card heights per platform — keeps the masonry from jumping while
         // the real embed is still a placeholder.
-        const PLACEHOLDER_HEIGHTS = { instagram: 560, tiktok: 575, facebook: 500, unknown: 64 };
+        const PLACEHOLDER_HEIGHTS = { instagram: 560, tiktok: 740, facebook: 500, unknown: 64 };
 
         function makeCard(post) {
             const card = document.createElement('div');
@@ -356,10 +352,26 @@
         }
 
         // ── Lazy embed hydration ──────────────────────────────────────────────
-        // Cards render instantly as placeholders; the real embed (a plain iframe
-        // for all platforms) is injected only when the card scrolls near the
-        // viewport. This avoids firing every Instagram/TikTok/Facebook iframe at
-        // once, which the browser serialises behind its per-host connection cap.
+        // Cards render instantly as placeholders; the real embed is injected only
+        // when the card scrolls near the viewport. This avoids firing every
+        // Instagram/TikTok/Facebook embed at once, which the browser serialises
+        // behind its per-host connection cap, making the page feel slow.
+
+        let tiktokReloadQueued = false;
+        function loadTikTok() {
+            // (Re)inject TikTok's official embed.js — it converts any not-yet-
+            // processed .tiktok-embed blockquotes into iframes. Debounced so a
+            // burst of hydrations triggers a single reload.
+            if (tiktokReloadQueued) return;
+            tiktokReloadQueued = true;
+            requestAnimationFrame(() => setTimeout(() => {
+                tiktokReloadQueued = false;
+                const s = document.createElement('script');
+                s.src = 'https://www.tiktok.com/embed.js';
+                s.async = true;
+                document.body.appendChild(s);
+            }, 150));
+        }
 
         function hydrateCard(card) {
             if (card.dataset.hydrated) return;
@@ -369,6 +381,7 @@
             body.classList.remove('placeholder');
             body.style.minHeight = '';
             body.innerHTML = embedHTML(post);
+            if (post.platform === 'tiktok') loadTikTok();
         }
 
         // rootMargin preloads cards ~1.5 viewports ahead so embeds are usually
