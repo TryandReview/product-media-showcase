@@ -299,10 +299,12 @@
                 case 'instagram': {
                     const m = u.match(/instagram\.com\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
                     if (!m) return fallbackLink(u);
-                    const src = `https://www.instagram.com/${m[1]}/${m[2]}/embed/captioned/`;
-                    return `<iframe src="${src}" width="400" height="560" loading="lazy"
-                        frameborder="0" scrolling="no" allowtransparency="true"
-                        style="display:block;max-width:100%;border:0;border-radius:3px;"></iframe>`;
+                    const permalink = `https://www.instagram.com/${m[1]}/${m[2]}/`;
+                    // Official blockquote embed (processed by Instagram's embed.js);
+                    // renders the full captioned card and auto-sizes to fit.
+                    return `<blockquote class="instagram-media"
+                        data-instgrm-permalink="${permalink}" data-instgrm-version="14"
+                        style="margin:0;width:100%;max-width:400px;min-width:326px;"></blockquote>`;
                 }
                 case 'tiktok': {
                     const id = (u.match(/\/video\/(\d+)/) || [])[1] || '';
@@ -331,7 +333,7 @@
 
         // Approx card heights per platform — keeps the masonry from jumping while
         // the real embed is still a placeholder.
-        const PLACEHOLDER_HEIGHTS = { instagram: 560, tiktok: 740, facebook: 500, unknown: 64 };
+        const PLACEHOLDER_HEIGHTS = { instagram: 640, tiktok: 740, facebook: 500, unknown: 64 };
 
         function makeCard(post) {
             const card = document.createElement('div');
@@ -373,6 +375,26 @@
             }, 150));
         }
 
+        let igReloadQueued = false;
+        function loadInstagram() {
+            // Instagram's embed.js exposes window.instgrm.Embeds.process() to
+            // (re)render any new .instagram-media blockquotes without reloading the
+            // script; if it isn't loaded yet, inject it (it processes on load).
+            if (igReloadQueued) return;
+            igReloadQueued = true;
+            requestAnimationFrame(() => setTimeout(() => {
+                igReloadQueued = false;
+                if (window.instgrm && window.instgrm.Embeds && window.instgrm.Embeds.process) {
+                    window.instgrm.Embeds.process();
+                } else {
+                    const s = document.createElement('script');
+                    s.src = 'https://www.instagram.com/embed.js';
+                    s.async = true;
+                    document.body.appendChild(s);
+                }
+            }, 150));
+        }
+
         function hydrateCard(card) {
             if (card.dataset.hydrated) return;
             card.dataset.hydrated = '1';
@@ -382,6 +404,7 @@
             body.style.minHeight = '';
             body.innerHTML = embedHTML(post);
             if (post.platform === 'tiktok') loadTikTok();
+            else if (post.platform === 'instagram') loadInstagram();
         }
 
         // rootMargin preloads cards ~1.5 viewports ahead so embeds are usually
