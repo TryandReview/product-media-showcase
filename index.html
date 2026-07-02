@@ -178,6 +178,8 @@
             max-width: 100%;
             margin: 0 auto;
         }
+        /* Lazy placeholder shown until a card scrolls near the viewport. */
+        .card-body.placeholder { align-items: center; }
 
         .link-card {
             display: block;
@@ -240,8 +242,6 @@
         <div id="feed" style="display:none;"></div>
     </main>
 
-    <script async src="https://www.tiktok.com/embed.js"></script>
-
     <script>
         // ── Data source resolution ────────────────────────────────────────────
         //
@@ -300,21 +300,25 @@
                     const m = u.match(/instagram\.com\/(p|reel|tv)\/([A-Za-z0-9_-]+)/);
                     if (!m) return fallbackLink(u);
                     const src = `https://www.instagram.com/${m[1]}/${m[2]}/embed/captioned/`;
-                    return `<iframe src="${src}" width="400" height="560"
+                    return `<iframe src="${src}" width="400" height="560" loading="lazy"
                         frameborder="0" scrolling="no" allowtransparency="true"
                         style="display:block;max-width:100%;border:0;border-radius:3px;"></iframe>`;
                 }
                 case 'tiktok': {
                     const id = (u.match(/\/video\/(\d+)/) || [])[1] || '';
-                    return `<blockquote class="tiktok-embed" cite="${u}" data-video-id="${id}"
-                        style="max-width:605px;min-width:325px;"><section></section></blockquote>`;
+                    if (!id) return fallbackLink(u);
+                    const src = `https://www.tiktok.com/player/v1/${id}?description=1&music_info=1`;
+                    return `<iframe src="${src}" width="325" height="575" loading="lazy"
+                        frameborder="0" scrolling="no"
+                        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+                        style="display:block;max-width:100%;border:0;border-radius:3px;"></iframe>`;
                 }
                 case 'facebook': {
                     const isVideo = /\/videos?\/|watch\?.*v=|\/video\//i.test(u);
                     const plugin  = isVideo ? 'video' : 'post';
                     const src     = `https://www.facebook.com/plugins/${plugin}.php` +
                                     `?href=${encodeURIComponent(u)}&width=500&show_text=true&height=500`;
-                    return `<iframe src="${src}" width="500" height="500"
+                    return `<iframe src="${src}" width="500" height="500" loading="lazy"
                         style="display:block;max-width:100%;border:none;overflow:hidden;"
                         scrolling="no" frameborder="0" allowfullscreen="true"
                         allow="autoplay;clipboard-write;encrypted-media;picture-in-picture;web-share">
@@ -329,32 +333,58 @@
             return `<a class="link-card" href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`;
         }
 
+        // Approx card heights per platform — keeps the masonry from jumping while
+        // the real embed is still a placeholder.
+        const PLACEHOLDER_HEIGHTS = { instagram: 560, tiktok: 575, facebook: 500, unknown: 64 };
+
         function makeCard(post) {
             const card = document.createElement('div');
             card.className = 'card';
             card.dataset.platform = post.platform;
+            card.dataset.url = post.url;
+            const h = PLACEHOLDER_HEIGHTS[post.platform] ?? 480;
             card.innerHTML = `
                 <div class="card-header">
                     <span class="platform-badge ${post.platform}">
                         <span class="badge-dot"></span>${LABELS[post.platform] ?? 'Link'}
                     </span>
                 </div>
-                <div class="card-body">${embedHTML(post)}</div>`;
+                <div class="card-body placeholder" style="min-height:${h}px;">
+                    <div class="spinner"></div>
+                </div>`;
             return card;
         }
 
-        function processEmbeds() {
-            requestAnimationFrame(() => setTimeout(() => {
-                const s = document.createElement('script');
-                s.src = 'https://www.tiktok.com/embed.js';
-                s.async = true;
-                document.body.appendChild(s);
-            }, 100));
+        // ── Lazy embed hydration ──────────────────────────────────────────────
+        // Cards render instantly as placeholders; the real embed (a plain iframe
+        // for all platforms) is injected only when the card scrolls near the
+        // viewport. This avoids firing every Instagram/TikTok/Facebook iframe at
+        // once, which the browser serialises behind its per-host connection cap.
+
+        function hydrateCard(card) {
+            if (card.dataset.hydrated) return;
+            card.dataset.hydrated = '1';
+            const post = { url: card.dataset.url, platform: card.dataset.platform };
+            const body = card.querySelector('.card-body');
+            body.classList.remove('placeholder');
+            body.style.minHeight = '';
+            body.innerHTML = embedHTML(post);
         }
+
+        // rootMargin preloads cards ~1.5 viewports ahead so embeds are usually
+        // ready by the time they're scrolled into view.
+        const cardObserver = ('IntersectionObserver' in window)
+            ? new IntersectionObserver((entries, obs) => {
+                entries.forEach(e => {
+                    if (e.isIntersecting) { hydrateCard(e.target); obs.unobserve(e.target); }
+                });
+              }, { rootMargin: '1200px 0px' })
+            : null;
 
         // ── Render ────────────────────────────────────────────────────────────
         function renderPosts(posts) {
             const feed = document.getElementById('feed');
+            if (cardObserver) cardObserver.disconnect();   // stop watching old cards
             feed.innerHTML = '';
             if (posts.length === 0) {
                 feed.innerHTML = `<div class="state-box">
@@ -362,8 +392,12 @@
                     <p>Try a different filter or check the data source.</p></div>`;
                 return;
             }
-            posts.forEach(p => feed.appendChild(makeCard(p)));
-            processEmbeds();
+            posts.forEach(p => {
+                const card = makeCard(p);
+                feed.appendChild(card);
+                if (cardObserver) cardObserver.observe(card);
+                else hydrateCard(card);                     // no IO support → load all
+            });
         }
 
         function applyFilter(platform) {
